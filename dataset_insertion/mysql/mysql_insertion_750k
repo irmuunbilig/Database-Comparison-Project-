@@ -1,0 +1,132 @@
+import csv
+import mysql.connector
+import time
+
+# Database configuration
+db_config = {
+    'user': 'root',
+    'password': '',
+    'host': 'localhost',
+    'database': 'curriculum',
+    'allow_local_infile': 1
+}
+
+# Paths to the dataset files
+dataset_files = {
+    'professors': '/Users/irmuunbilig/Desktop/DB_pro/Dataset/750k/professors_750k.csv',
+    'courses': '/Users/irmuunbilig/Desktop/DB_pro/Dataset/750k/courses_750k.csv',
+    'schedules': '/Users/irmuunbilig/Desktop/DB_pro/Dataset/750k/schedules_750k.csv',
+}
+
+# Corresponding table names in the database
+table_names = {
+    'professors': 'professors3',
+    'courses': 'courses3',
+    'schedules': 'schedules3'
+}
+
+# SQL statements to create the tables
+create_tables = {
+    'professors': '''
+        CREATE TABLE IF NOT EXISTS professors3 (
+            prof_id INT PRIMARY KEY,
+            prof_name VARCHAR(100),
+            major VARCHAR(30)
+        );
+    ''',
+    'courses': '''
+        CREATE TABLE IF NOT EXISTS courses3 (
+            course_id INT PRIMARY KEY,
+            course_name VARCHAR(50),
+            prof_id INT,
+            credit_num INT,
+            campus VARCHAR(50),
+            FOREIGN KEY (prof_id) REFERENCES professors3(prof_id)
+        );
+    ''',
+    'schedules': '''
+        CREATE TABLE IF NOT EXISTS schedules3 (
+            course_id INT,
+            semester VARCHAR(50),
+            day_of_week VARCHAR(50),
+            start_time VARCHAR(10),
+            end_time VARCHAR(10),
+            FOREIGN KEY (course_id) REFERENCES courses3(course_id)
+        );
+    '''
+}
+
+def create_table(table_sql):
+    # Connect to the MySQL database
+    connection = mysql.connector.connect(**db_config)
+    cursor = connection.cursor()
+    try:
+        cursor.execute(table_sql)
+        connection.commit()
+    except mysql.connector.Error as err:
+        print(f"Error creating table: {err}")
+        connection.rollback()
+    finally:
+        cursor.close()
+        connection.close()
+
+def import_csv_to_db(file_path, table_name):
+    # Connect to the MySQL database
+    connection = mysql.connector.connect(**db_config)
+    cursor = connection.cursor()
+
+    # Disable foreign key checks
+    cursor.execute("SET foreign_key_checks = 0")
+
+    with open(file_path, 'r') as csvfile:
+        reader = csv.DictReader(csvfile)
+        batch_size = 1000
+        start_time = time.time()
+        rows = []
+
+        for i, row in enumerate(reader, 1):
+            # Rename 'day' column to 'day_of_week' if present in the row
+            if 'day' in row:
+                row['day_of_week'] = row.pop('day')
+            rows.append(tuple(row.values()))
+            if i % batch_size == 0:
+                # Construct the insert query
+                insert_query = f"INSERT INTO {table_name} ({', '.join(row.keys())}) VALUES ({', '.join(['%s']*len(row))})"
+                try:
+                    cursor.executemany(insert_query, rows)
+                    connection.commit()
+                    print(f"Inserted {i} rows into {table_name}")
+                except mysql.connector.Error as err:
+                    print(f"Error: {err}")
+                    connection.rollback()
+                rows = []
+
+        # Insert any remaining rows
+        if rows:
+            insert_query = f"INSERT INTO {table_name} ({', '.join(row.keys())}) VALUES ({', '.join(['%s']*len(row))})"
+            try:
+                cursor.executemany(insert_query, rows)
+                connection.commit()
+                print(f"Inserted {i} rows into {table_name}")
+            except mysql.connector.Error as err:
+                print(f"Error: {err}")
+                connection.rollback()
+
+    # Enable foreign key checks
+    cursor.execute("SET foreign_key_checks = 1")
+
+    cursor.close()
+    connection.close()
+
+    execution_time = time.time() - start_time
+    print(f"Imported {table_name} dataset in {execution_time:.2f} seconds")
+
+# Create tables
+for table, create_sql in create_tables.items():
+    print(f"Creating table {table_names[table]}...")
+    create_table(create_sql)
+
+# Import each dataset
+for dataset, file_path in dataset_files.items():
+    print(f"Importing {dataset} dataset...")
+    import_csv_to_db(file_path, table_names[dataset])
